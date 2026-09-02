@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UniLife | 物件情報チェックAI</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img class="brand-logo" src="./unilife-logo.png" alt="UniLife" /><span class="brand-divider"></span><span class="tool-name">物件情報チェック</span></div>
+    <div class="top-actions"><button type="button" id="helpBtn">？ <span>使い方</span></button></div>
+  </header>
+
+  <main class="page-shell">
+    <section class="hero">
+      <div>
+        <p class="kicker">PROPERTY CREATIVE CHECK</p>
+        <h1>投稿予定の画像・動画を、<br><span>公式情報とまとめてチェック。</span></h1>
+        <p>物件Webページ・物件詳細PDF・Instagram素材の3つをAIが横断照合。<br>文字情報だけでなく、建物・室内画像が公式素材と整合するかも確認します。</p>
+      </div>
+      <div class="source-flow" aria-hidden="true">
+        <div class="source-dot blue">WEB</div><span>＋</span><div class="source-dot cyan">PDF</div><span>＋</span><div class="source-dot orange">SNS</div><b>✓</b>
+      </div>
+    </section>
+
+    <div id="aiNotice" class="ai-notice hidden"></div>
+
+    <section class="workspace">
+      <form class="panel input-panel" id="checkForm">
+        <div class="panel-heading"><span class="eyebrow">CHECK</span><h2>チェックする素材</h2><span class="steps">3つだけ</span></div>
+
+        <section class="source-input first">
+          <div class="source-number">1</div>
+          <div class="source-body">
+            <div class="source-title"><div><strong>UniLife 物件ページ</strong><span class="required">必須</span></div><small>正しい物件情報の基準</small></div>
+            <div class="url-row">
+              <input id="propertyUrl" name="propertyUrl" type="url" placeholder="https://unilife.co.jp/view/…" autocomplete="off" required />
+              <button type="button" id="previewPropertyBtn" class="mini-btn">確認</button>
+            </div>
+            <div id="propertyPreview" class="property-preview hidden"></div>
+          </div>
+        </section>
+
+        <section class="source-input">
+          <div class="source-number">2</div>
+          <div class="source-body">
+            <div class="source-title"><div><strong>物件詳細の紙資料</strong><span class="recommend">推奨</span></div><small>PDFをそのまま追加</small></div>
+            <label class="dropzone compact" id="pdfDropzone">
+              <input id="document" name="document" type="file" accept="application/pdf,.pdf" hidden />
+              <span class="upload-icon">⇧</span>
+              <span><b>PDFを選択</b> またはドラッグ＆ドロップ</span>
+              <em>物件詳細資料・募集資料など</em>
+            </label>
+            <div id="pdfFile" class="file-chip hidden"></div>
+          </div>
+        </section>
+
+        <section class="source-input media-source">
+          <div class="source-number orange">3</div>
+          <div class="source-body">
+            <div class="source-title"><div><strong>Instagram 投稿予定素材</strong><span class="required orange-tag">必須</span></div><small>画像・カルーセル・リール動画に対応</small></div>
+            <label class="dropzone media-zone" id="mediaDropzone">
+              <input id="media" name="media" type="file" accept="image/*,video/mp4,video/quicktime,video/webm,.mov,.mp4,.webm" multiple hidden />
+              <div class="media-icons"><span>▧</span><span>▶</span></div>
+              <span><b>投稿予定の画像・動画を追加</b></span>
+              <em>複数画像OK / JPG・PNG・WebP・MP4・MOV・WebM</em>
+            </label>
+            <div id="mediaPreview" class="media-preview"></div>
+            <details class="instagram-url-box">
+              <summary>すでにInstagramに投稿済みなら、投稿URLから試す</summary>
+              <input id="instagramUrl" name="instagramUrl" type="url" placeholder="https://www.instagram.com/p/…" />
+              <p>Instagram側の制限で取得できない場合があります。その場合は画像・動画を直接追加してください。</p>
+            </details>
+          </div>
+        </section>
+
+        <button id="submitBtn" class="primary-btn" type="submit"><span class="sparkle">✦</span><span id="submitLabel">3つの情報をAIで照合</span><span>→</span></button>
+        <p class="privacy-note">アップロードした内容は、ブラウザからGemini APIへ直接送信されます。GitHub Pages上には保存しません。社内ルールに従って利用してください。</p>
+      </form>
+
+      <section class="panel result-panel" id="resultPanel">
+        <div class="panel-heading"><span class="eyebrow">RESULT</span><h2>比較結果</h2><span id="modeBadge" class="mode-badge">3ソース照合</span></div>
+
+        <div id="emptyState" class="empty-state">
+          <div class="empty-graphic"><span>WEB</span><span>PDF</span><span>SNS</span><b>✓</b></div>
+          <h3>チェック結果はここに表示されます</h3>
+          <p>左の3つの情報を追加して、<br>「AIで照合」を押してください。</p>
+        </div>
+
+        <div id="loadingState" class="loading-state hidden">
+          <div class="loader"></div>
+          <h3>画像・動画まで確認しています</h3>
+          <p id="loadingText">Web・PDF・Instagram素材を読み込んでいます…</p>
+          <div class="loading-estimate" aria-live="polite">
+            <div class="loading-time"><strong id="remainingTime">残り約 1分</strong><span id="elapsedTime">経過 0:00</span></div>
+            <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+            <small id="estimateNote">処理時間は素材の枚数・動画の長さ・通信状況による目安です。</small>
+          </div>
+          <div class="loading-steps" id="loadingSteps">
+            <span data-stage="0" class="active">情報取得</span><span>→</span>
+            <span data-stage="1">PDF確認</span><span>→</span>
+            <span data-stage="2">画像・動画解析</span><span>→</span>
+            <span data-stage="3">差分照合</span>
+          </div>
+        </div>
+
+        <div id="resultContent" class="result-content hidden">
+          <div class="property-card">
+            <div id="propertyThumb" class="property-thumb">UniLife</div>
+            <div class="property-meta"><span class="tiny-label">CHECKED PROPERTY</span><h3 id="propertyName">物件名</h3><p id="propertyDesc"></p><div class="source-badges"><span class="web">● Web</span><span id="pdfBadge" class="pdf">● PDF</span><span class="sns">● Instagram</span></div></div>
+          </div>
+
+          <div class="summary-card">
+            <div class="summary-item match"><span class="summary-icon">✓</span><div><small>一致</small><strong id="matchCount">0</strong><em>件</em></div></div>
+            <div class="summary-divider"></div>
+            <div class="summary-item warn"><span class="summary-icon">!</span><div><small>要修正</small><strong id="mismatchCount">0</strong><em>件</em></div></div>
+            <div class="summary-divider"></div>
+            <div class="summary-item review"><span class="summary-icon">?</span><div><small>要確認</small><strong id="reviewCount">0</strong><em>件</em></div></div>
+          </div>
+
+          <div id="warningBox" class="warning-box hidden"></div>
+
+          <div id="officialConflict" class="official-conflict hidden"></div>
+
+          <section id="mismatchSection" class="result-section mismatch-section hidden">
+            <div class="section-head orange"><div><span class="round-icon">!</span><strong>Instagramで修正したいところ</strong></div><span id="mismatchBadge">0件</span></div>
+            <div id="mismatchList"></div>
+          </section>
+
+          <section id="reviewSection" class="result-section review-section hidden">
+            <div class="section-head neutral"><div><span class="round-icon">?</span><strong>人の確認が必要</strong></div><span id="reviewBadge">0件</span></div>
+            <div id="reviewList"></div>
+          </section>
+
+          <section id="imageCheckSection" class="result-section image-check-section hidden">
+            <div class="section-head blue"><div><span class="round-icon">▧</span><strong>建物・室内画像チェック</strong></div><span id="imageCheckBadge">0件</span></div>
+            <div id="imageCheckSummary" class="image-check-summary"></div>
+            <div id="imageCheckList" class="image-check-list"></div>
+          </section>
+
+          <details id="matchSection" class="match-section hidden">
+            <summary class="section-head green"><div><span class="round-icon">✓</span><strong>一致している項目</strong></div><span id="matchBadge">0件</span></summary>
+            <div id="matchList" class="match-grid"></div>
+          </details>
+
+          <div class="overall-note"><strong>AIの確認メモ</strong><p id="mediaOverview"></p><ul id="overallNotes"></ul></div>
+          <p class="disclaimer">※ AIによる校正補助です。公開前の最終確認は必ず担当者が行ってください。</p>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="helpDialog">
+    <div class="dialog-head"><strong>使い方</strong><button type="button" id="closeHelp">×</button></div>
+    <ol>
+      <li>UniLifeの<strong>1物件の詳細ページURL</strong>を貼ります。</li>
+      <li>その物件の<strong>詳細PDF</strong>があれば追加します。</li>
+      <li>Instagramへ投稿予定の<strong>画像・カルーセル画像・リール動画</strong>をそのまま追加します。</li>
+      <li>AIが「Web」「PDF」「Instagram」の文字情報を照合し、さらに建物・室内画像も公式掲載画像と比較します。</li>
+    </ol>
+  </dialog>
+
+  <script src="./config.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
