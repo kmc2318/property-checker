@@ -99,11 +99,34 @@
             </div>
           </section>
 
+          <section class="source-input">
+            <div class="source-number">2</div>
+            <div class="source-body">
+              <div class="source-title"><div><strong>物件詳細のPDF</strong><span class="optional-tag">任意</span></div><small>あれば記事内の物件に対応する資料を追加</small></div>
+              <label class="dropzone compact" id="articlePdfDropzone">
+                <input id="articleDocument" name="articleDocument" type="file" accept="application/pdf,.pdf" multiple hidden />
+                <span class="upload-icon">⇧</span>
+                <span><b>PDFを選択</b> またはドラッグ＆ドロップ</span>
+                <em>複数物件の記事ならPDFも複数追加できます</em>
+              </label>
+              <div id="articlePdfFiles" class="article-pdf-files"></div>
+            </div>
+          </section>
+
+          <section class="source-input article-property-input">
+            <div class="source-number">3</div>
+            <div class="source-body">
+              <div class="source-title"><div><strong>比較するUniLife物件ページ</strong><span class="optional-tag">任意</span></div><small>あれば追加 / 複数物件なら1行に1URL</small></div>
+              <textarea id="articlePropertyUrls" name="articlePropertyUrls" rows="4" placeholder="https://unilife.co.jp/view/12345/&#10;https://unilife.co.jp/view/67890/"></textarea>
+              <p class="field-note">未入力でも記事内の物件リンクを自動検出します。入力した場合は、その物件ページを優先して照合します。</p>
+            </div>
+          </section>
+
           <div class="article-auto-card">
             <div class="auto-icon">✦</div>
             <div>
-              <strong>記事URLだけでOKです</strong>
-              <p>記事内に掲載されている物件を自動で見つけ、リンクされているUniLifeの各物件詳細ページと照合します。複数物件でも物件ごとに結果を分けて表示します。</p>
+              <strong>用意できる情報だけで照合できます</strong>
+              <p>記事URLだけ必須です。PDFまたは物件ページのどちらか片方だけでもチェックできます。両方ある場合は3ソースで照合します。</p>
             </div>
           </div>
 
@@ -209,7 +232,7 @@
           </section>
 
           <div class="overall-note article-overall-note"><strong>AIの確認メモ</strong><ul id="articleOverallNotes"></ul></div>
-          <p class="disclaimer">※ 記事内の物件リンクと公開中の物件詳細ページをもとにしたAI校正です。公開前の最終確認は必ず担当者が行ってください。</p>
+          <p class="disclaimer">※ 記事と、追加されたPDF・物件ページをもとにしたAI校正です。公開前の最終確認は必ず担当者が行ってください。</p>
         </div>
       </section>
     </section>
@@ -222,15 +245,15 @@
       <ol>
         <li>UniLifeの<strong>1物件の詳細ページURL</strong>を貼ります。</li>
         <li>その物件の<strong>詳細PDF</strong>があれば追加します。</li>
-        <li>Instagramへ投稿予定の<strong>画像・カルーセル画像・リール動画</strong>を追加します。動画はブラウザ内で1秒ごとにフレーム抽出し、16コマずつまとめて確認します。</li>
+        <li>Instagramへ投稿予定の<strong>画像・カルーセル画像・リール動画</strong>を追加します。動画はブラウザ内で1秒ごとにフレーム抽出し、9コマずつまとめて確認します。</li>
         <li>Web・PDF・Instagramの文字情報と画像を照合します。</li>
       </ol>
       <h3>Web記事URLをチェック</h3>
       <ol>
-        <li>新着情報・特集などの<strong>記事URLを1つ</strong>貼ります。</li>
-        <li>記事内の物件をAIが検出し、リンクされた<strong>各物件詳細ページ</strong>を確認します。</li>
-        <li>複数物件でも、物件ごとに情報の一致・要修正・要確認を分けて表示します。</li>
-        <li>キャンペーン期間・営業日・広告有効期限など、記事全体の時限情報も確認します。</li>
+        <li>新着情報・特集などの<strong>記事URL</strong>を貼ります。</li>
+        <li>対応する<strong>物件詳細PDF</strong>を追加します。複数物件なら複数PDFでも構いません。</li>
+        <li>比較する<strong>UniLife物件ページURL</strong>を入力します。複数物件なら1行に1URLです。</li>
+        <li>記事・物件ページ・PDFの3つを項目ごとに比較し、公式側同士の差も含めて表示します。</li>
       </ol>
     </div>
   </dialog>

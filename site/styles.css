@@ -118,3 +118,25 @@
 
 /* 統合版: 動画1秒抽出の説明が長くても読みやすくする */
 .media-zone em{max-width:95%;line-height:1.5}
+
+/* ===== 記事モード: 記事 + PDF + 物件ページの3ソース照合 ===== */
+.article-property-input textarea{width:100%;min-height:118px;resize:vertical;border:1px solid #cddbe7;border-radius:9px;padding:12px 14px;outline:none;color:var(--text);font:inherit;line-height:1.6;background:#fff}
+.article-property-input textarea:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(18,151,229,.1)}
+.field-note{margin:6px 2px 0;color:#8c9aa8;font-size:10px;line-height:1.55}
+.article-pdf-files{display:flex;flex-direction:column;gap:7px;margin-top:9px}
+.article-pdf-files:empty{display:none}
+.article-pdf-chip{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid #d9e4ec;border-radius:9px;background:#fff}
+.article-pdf-chip .file-type{background:#eaf7ff;color:var(--blue-deep);border-radius:5px;padding:5px 7px;font-size:10px;font-weight:900}
+.article-pdf-chip>div{min-width:0;flex:1}.article-pdf-chip strong,.article-pdf-chip small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.article-pdf-chip strong{font-size:12px;color:var(--navy)}.article-pdf-chip small{font-size:10px;color:#92a0af;margin-top:2px}.article-pdf-chip button{width:24px;height:24px;border:0;border-radius:50%;background:#f0f4f7;color:#718194;font-weight:800}
+.article-compare-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+.article-compare-grid>div+div{border-left:1px solid #e6edf2;background:#f9fbfc}
+.article-compare-grid .article-source{background:#fffaf6}.article-compare-grid .article-source strong{color:#d96822}
+.article-compare-grid .pdf-source{background:#f6fcfd}.article-compare-grid .pdf-source strong{color:#248aa0}
+.article-check-row.official-conflict{background:#fff9f7}.article-check-row.official-conflict .article-check-top>span{background:#fff1ec;color:#9a4b32}
+
+@media(max-width:650px){
+  .article-compare-grid{grid-template-columns:1fr}
+  .article-compare-grid>div+div{border-left:0;border-top:1px solid #e6edf2}
+}
+
+.optional-tag{font-size:10px;border-radius:4px;padding:2px 5px;background:#f2f4f6;color:#788898}

@@ -11,6 +11,10 @@ const submitBtn = $('submitBtn');
 const submitLabel = $('submitLabel');
 const articleUrl = $('articleUrl');
 const modeButtons = [...document.querySelectorAll('.mode-option')];
+const articleDocumentInput = $('articleDocument');
+const articlePdfDropzone = $('articlePdfDropzone');
+const articlePdfFiles = $('articlePdfFiles');
+const articlePropertyUrls = $('articlePropertyUrls');
 
 const CONFIG = window.APP_CONFIG || {};
 const GEMINI_API_KEY = String(CONFIG.GEMINI_API_KEY || '').trim();
@@ -27,6 +31,7 @@ let loadingEstimateSeconds = 60;
 let cooldownTimer = null;
 let cachedPropertyForCurrentUrl = null;
 let currentMode = 'instagram';
+let selectedArticlePdfs = [];
 
 class GeminiHttpError extends Error {
   constructor(message, status = 0, retryAfter = 0) {
@@ -53,7 +58,7 @@ function init() {
 
 
 function idleSubmitLabel() {
-  return currentMode === 'article' ? '記事URLをAIでチェック' : '3つの情報をAIで照合';
+  return currentMode === 'article' ? '記事をAIで照合' : '3つの情報をAIで照合';
 }
 
 function setMode(mode) {
@@ -67,22 +72,23 @@ function setMode(mode) {
   $('articleModeFields').classList.toggle('hidden', currentMode !== 'article');
   propertyUrl.required = currentMode === 'instagram';
   articleUrl.required = currentMode === 'article';
-  $('inputStepBadge').textContent = currentMode === 'article' ? 'URL 1つだけ' : '3つだけ';
-  $('modeBadge').textContent = currentMode === 'article' ? 'Web記事 / 複数物件' : 'Instagram / 3ソース照合';
+  articlePropertyUrls.required = false;
+  $('inputStepBadge').textContent = currentMode === 'article' ? '記事URLだけ必須' : '3つだけ';
+  $('modeBadge').textContent = currentMode === 'article' ? 'Web記事 / 柔軟照合' : 'Instagram / 3ソース照合';
   submitLabel.textContent = cooldownTimer ? submitLabel.textContent : idleSubmitLabel();
   $('resultContent').classList.add('hidden');
   $('articleResultContent').classList.add('hidden');
   $('loadingState').classList.add('hidden');
   $('emptyState').classList.remove('hidden');
   $('emptyState').innerHTML = currentMode === 'article'
-    ? '<div class="empty-graphic article"><span>ARTICLE</span><span>→</span><span>PROPERTY</span><b>✓</b></div><h3>記事のチェック結果はここに表示されます</h3><p>記事URLを1つ入れるだけで、<br>掲載物件を分けて公式ページと照合します。</p>'
+    ? '<div class="empty-graphic article"><span>ARTICLE</span><span>PDF</span><span>WEB</span><b>✓</b></div><h3>記事のチェック結果はここに表示されます</h3><p>記事URLだけ必須。PDF・物件ページは<br>用意できるものだけ追加してください。</p>'
     : '<div class="empty-graphic"><span>WEB</span><span>PDF</span><span>SNS</span><b>✓</b></div><h3>チェック結果はここに表示されます</h3><p>左の3つの情報を追加して、<br>「AIで照合」を押してください。</p>';
   updateLoadingStepLabels();
 }
 
 function updateLoadingStepLabels() {
   const labels = currentMode === 'article'
-    ? ['記事取得', '掲載物件検出', '公式ページ確認', '差分照合']
+    ? ['記事取得', 'PDF確認', '物件ページ確認', '差分照合']
     : ['情報取得', 'PDF確認', '画像・動画解析', '差分照合'];
   document.querySelectorAll('#loadingSteps [data-stage]').forEach((el, idx) => { el.textContent = labels[idx] || ''; });
 }
@@ -104,6 +110,44 @@ documentInput.addEventListener('change', () => renderPdf(documentInput.files[0])
 ['dragleave','drop'].forEach(name => mediaDropzone.addEventListener(name, e => { stopDefaults(e); mediaDropzone.classList.remove('dragover'); }));
 mediaDropzone.addEventListener('drop', e => addMedia([...e.dataTransfer.files]));
 mediaInput.addEventListener('change', () => addMedia([...mediaInput.files]));
+
+['dragenter','dragover'].forEach(name => articlePdfDropzone.addEventListener(name, e => { stopDefaults(e); articlePdfDropzone.classList.add('dragover'); }));
+['dragleave','drop'].forEach(name => articlePdfDropzone.addEventListener(name, e => { stopDefaults(e); articlePdfDropzone.classList.remove('dragover'); }));
+articlePdfDropzone.addEventListener('drop', e => addArticlePdfs([...e.dataTransfer.files]));
+articleDocumentInput.addEventListener('change', () => addArticlePdfs([...articleDocumentInput.files]));
+
+function addArticlePdfs(files) {
+  const valid = files.filter(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  selectedArticlePdfs = [...selectedArticlePdfs, ...valid]
+    .filter((file, index, arr) => index === arr.findIndex(f => f.name === file.name && f.size === file.size))
+    .slice(0, 10);
+  syncArticlePdfInput();
+  renderArticlePdfs();
+}
+
+function syncArticlePdfInput() {
+  const dt = new DataTransfer();
+  selectedArticlePdfs.forEach(f => dt.items.add(f));
+  articleDocumentInput.files = dt.files;
+}
+
+function removeArticlePdf(index) {
+  selectedArticlePdfs.splice(index, 1);
+  syncArticlePdfInput();
+  renderArticlePdfs();
+}
+
+function renderArticlePdfs() {
+  articlePdfFiles.innerHTML = selectedArticlePdfs.map((file, index) => `<div class="article-pdf-chip"><span class="file-type">PDF</span><div><strong>${escapeHtml(file.name)}</strong><small>${formatBytes(file.size)}</small></div><button type="button" data-index="${index}" aria-label="削除">×</button></div>`).join('');
+  articlePdfFiles.querySelectorAll('button').forEach(btn => btn.addEventListener('click', () => removeArticlePdf(Number(btn.dataset.index))));
+}
+
+function parseArticlePropertyUrls() {
+  return [...new Set(String(articlePropertyUrls.value || '')
+    .split(/\r?\n|,/)
+    .map(v => v.trim())
+    .filter(Boolean))];
+}
 
 function renderPdf(file) {
   if (!file) { pdfFile.classList.add('hidden'); return; }
@@ -197,7 +241,7 @@ $('previewArticleBtn').addEventListener('click', () => {
     return;
   }
   el.classList.remove('error');
-  el.innerHTML = '<span>✓</span><div><strong>記事URLを確認しました</strong><small>AIチェック時に記事内の物件リンクを自動検出します。</small></div>';
+  el.innerHTML = '<span>✓</span><div><strong>記事URLを確認しました</strong><small>PDFと入力した物件ページを使って3ソース照合します。</small></div>';
 });
 
 form.addEventListener('submit', async (e) => {
@@ -274,36 +318,73 @@ async function runInstagramCheck() {
 
 async function runArticleCheck() {
   const url = articleUrl.value.trim();
+  const propertyUrls = parseArticlePropertyUrls();
   if (!url) return alert('チェックしたい記事URLを入力してください。');
   if (!isUnilifeUrl(url)) return alert('UniLifeの公開記事URLを入力してください。');
+  const invalidPropertyUrl = propertyUrls.find(v => !isUnilifePropertyUrl(v));
+  if (invalidPropertyUrl) return alert(`物件ページURLを確認してください：${invalidPropertyUrl}`);
 
   setLoading(true);
   try {
     setStage(0, '記事ページの内容を確認しています…');
     const outline = await resolveArticleOutline(url);
 
-    setStage(1, `${outline.properties.length}件の掲載物件を検出しました。リンクを整理しています…`);
-    const today = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-    const prompt = buildArticleAnalysisPrompt(url, today, outline);
+    setStage(1, 'PDFをGeminiで確認できる形に準備しています…');
+    const pdfContents = [];
+    for (const file of selectedArticlePdfs) {
+      pdfContents.push({ file, content: await fileToGeminiContent(file, 'document') });
+    }
 
-    setStage(2, '掲載物件の公式詳細ページを確認しています…');
+    setStage(2, propertyUrls.length ? `${propertyUrls.length}件の指定物件ページと記事内リンクを確認しています…` : '記事内の物件ページリンクを自動検出して確認しています…');
+    const mergedOutline = mergeArticlePropertyUrls(outline, propertyUrls);
+    const today = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const input = buildArticleAnalysisInput(url, today, mergedOutline, propertyUrls, pdfContents);
+
     const result = await callGeminiJson({
       model: GEMINI_MODEL,
-      input: [{ type: 'text', text: prompt }],
+      input,
       tools: [{ type: 'url_context' }],
       response_format: { type: 'text', mime_type: 'application/json', schema: buildArticleResultSchema() }
-    }, 360_000);
+    }, 420_000);
 
-    setStage(3, '記事と各物件の公式情報を照合しています…');
+    setStage(3, '記事と利用可能な参照情報の差分を整理しています…');
     const data = formatArticleResultPayload(result, url);
     if (!data.articleTitle && outline.title) data.articleTitle = outline.title;
     if (!data.overview && outline.overview) data.overview = outline.overview;
+    data.pdfCount = selectedArticlePdfs.length;
     renderArticleResult(data);
   } catch (error) {
     renderCheckError(error);
   } finally {
     setLoading(false, true);
   }
+}
+
+function mergeArticlePropertyUrls(outline, explicitUrls) {
+  const detected = Array.isArray(outline?.properties) ? outline.properties : [];
+  const byUrl = new Map(detected.map(item => [normalizeUrlForCompare(item.property_url), item]));
+  const properties = explicitUrls.map(url => {
+    const found = byUrl.get(normalizeUrlForCompare(url));
+    return found || { property_name: '', property_url: url, article_location: '入力された比較対象' };
+  });
+  detected.forEach(item => {
+    const key = normalizeUrlForCompare(item.property_url);
+    if (!properties.some(p => normalizeUrlForCompare(p.property_url) === key)) properties.push(item);
+  });
+  return { ...outline, properties: properties.slice(0, 20) };
+}
+
+function buildArticleAnalysisInput(url, today, outline, explicitUrls, pdfContents) {
+  const input = [{ type: 'text', text: buildArticleAnalysisPrompt(url, today, outline, explicitUrls, pdfContents.map(x => x.file.name)) }];
+  if (pdfContents.length) {
+    pdfContents.forEach((entry, index) => {
+      input.push({ type: 'text', text: `【比較用PDF ${index + 1}: ${entry.file.name}】物件名を確認し、対応する物件にだけ使用してください。別物件のPDFを混ぜないでください。` });
+      input.push(entry.content);
+    });
+  } else {
+    input.push({ type: 'text', text: '【比較用PDF】未添付です。PDFの値は「未添付 / 不明」とし、記事とWebの2ソースだけで断定しすぎないでください。' });
+  }
+  return input;
 }
 
 async function resolveArticleOutline(url) {
@@ -383,9 +464,16 @@ function renderCheckError(error) {
   $('emptyState').innerHTML = `<div class="empty-graphic error">!</div><h3>チェックできませんでした</h3><p>${escapeHtml(humanizeError(error))}</p>`;
 }
 
-function buildArticleAnalysisPrompt(url, today, outline) {
+function buildArticleAnalysisPrompt(url, today, outline, explicitUrls = [], pdfNames = []) {
   return `あなたはUniLifeのWeb記事・物件情報校正アシスタントです。
-次のUniLife公開記事をURL Contextで必ず開き、記事内に掲載されている物件情報を各公式物件詳細ページと照合してください。
+チェック対象の記事ページを基準に、利用可能な参照情報だけを使って照合してください。
+
+利用できる情報は次の3種類です。
+1. チェック対象の記事ページ（必須）
+2. UniLife公式物件ページ（ユーザー指定または記事内リンクから自動検出。なくても可）
+3. 添付された物件詳細PDF（なくても可）
+
+PDFと物件ページは両方そろっている必要はありません。片方だけの場合は、その情報と記事を比較してください。両方ある場合は3ソースで比較してください。
 
 【チェック対象の記事URL】
 ${url}
@@ -393,19 +481,28 @@ ${url}
 【今日の日付（日本時間）】
 ${today}
 
-【記事から検出した主紹介物件】
-${outline.properties.length ? outline.properties.map((p, i) => `${i + 1}. ${p.property_name || '物件名不明'}
+【ユーザーが指定した比較対象の物件ページ】
+${explicitUrls.length ? explicitUrls.map((u, i) => `${i + 1}. ${u}`).join('\n') : '指定なし'}
+
+【記事から検出した主紹介物件・比較候補】
+${outline.properties.length ? outline.properties.map((p, i) => `${i + 1}. ${p.property_name || '物件名はページで確認'}
    ${p.property_url}
-   記事内位置: ${p.article_location || '不明'}`).join('\n') : '物件詳細リンクを事前抽出できませんでした。記事本文を確認し、推測せず判定してください。'}
+   記事内位置: ${p.article_location || '不明'}`).join('\n') : '記事内リンクは事前抽出できませんでした。ユーザー指定URLを使ってください。'}
 ${outline.text ? `\n【ブラウザから取得した記事本文の補助テキスト】\n${outline.text.slice(0, 45000)}` : ''}
 
+【添付PDF】
+${pdfNames.length ? pdfNames.map((n, i) => `${i + 1}. ${n}`).join('\n') : '未添付'}
+
 手順:
-1. 記事本文を読み、記事の主コンテンツ内で紹介されている物件をすべて特定する。
-2. 上の「記事から検出した主紹介物件」にURLがある場合、そのURLを対象物件の公式詳細ページとして使う。記事本文から別の /view/ URLを追加する場合は、記事の主紹介物件であることが明確なものだけにする。
-3. URL Contextを使い、列挙された各物件詳細URLを実際に開いて確認する。
-4. 記事に書かれている情報と、その物件の公式詳細ページの現在の公開情報を項目ごとに比較する。
-5. 記事全体に関するキャンペーン期間・店舗営業日・広告有効期限・完成予定時期など、時間経過で古くなる情報も確認する。
-6. 記事に複数物件がある場合は、文章・画像・設備情報を必ず物件ごとに分け、別物件の情報を混ぜない。
+1. 記事URLをURL Contextで必ず開き、記事本文に書かれている事実表現を確認する。
+2. ユーザー指定の物件ページURLがある場合はURL Contextで開く。指定がない場合は、記事本文で確認できる /view/ の物件リンクを自動検出して使う。物件ページを確認できない場合は web_value を「未指定 / 確認できず」とする。
+3. PDFが添付されている場合だけ読み、PDF内の物件名を確認して対応する物件だけに紐づける。別物件のPDF情報を混ぜない。PDFがない場合は pdf_value を「未添付」とする。
+4. 各項目について「記事」「物件ページ」「PDF」の3欄を返すが、存在しないソースを無理に補完しない。
+5. 物件ページとPDFの両方がある場合、それらが一致していれば公式情報の基準として記事を判定する。
+6. 物件ページとPDFの両方があり、両者が明確に食い違う場合のみ official_conflict とする。
+7. 物件ページかPDFの片方しかない場合は、その1ソースを参照して記事を判定してよい。存在しないソースがないこと自体を needs_review にしない。
+8. 記事に複数物件がある場合は、文章・画像・費用・設備を必ず物件ごとに分ける。
+9. 記事全体のキャンペーン期間・店舗営業日・広告有効期限なども確認する。PDFに該当情報がなければ無理に補わない。
 
 チェック対象:
 - 物件名、住所
@@ -416,22 +513,24 @@ ${outline.text ? `\n【ブラウザから取得した記事本文の補助テキ
 - オートロック、防犯カメラ、宅配BOX、家具家電、食事、ネット無料などの設備・サービス
 - キャンペーン名、対象者、期間、割引内容
 - 空室・募集状況に関する断定表現
-- 記事内画像と公式物件ページ画像の整合性（URL Contextで視覚的根拠を十分確認できる場合のみ）
+- 記事内画像と公式物件ページ/PDF画像の整合性（視覚的根拠を十分確認できる場合のみ）
 - 店舗営業日、広告有効期限、日付・曜日の論理的な矛盾
+- 広告コピー、キャッチコピー、見出しの事実性
 
 判定ルール:
-- match: 記事と公式物件ページが一致。
-- mismatch: 記事の記載が公式物件ページと明確に異なり、修正候補を示せる。
+- match: 利用可能な参照ソースと記事の意味が一致。WebまたはPDFの片方しかない場合でも、その参照ソースと記事が明確に一致していれば match 可。存在しないソースの値は「未添付」「未指定 / 確認できず」など正直に返す。
+- mismatch: 記事の記載が、利用可能な物件ページまたはPDFの情報と明確に異なり、修正候補を示せる。
 - notation_variation: 意味は同じで表記のみ異なる。「『A』と『B』の表記揺れ」のような小見出しにする。
-- needs_review: 公式側に記載がない、URL Contextで確認できない、画像判断の根拠が弱い、情報が時点依存など、人の確認が必要。
+- needs_review: 情報不足、時点依存、PDFの対応物件が不明、画像根拠が弱いなど、人の確認が必要。
+- official_conflict: WebとPDFの両方が提供・確認できており、その公式情報同士に明確な差がある場合のみ使う。
+- 「リニューアルオープン」と「フルリニューアルオープン」のように、一語の追加・削除で意味や訴求範囲が変わる場合は notation_variation ではなく mismatch とする。
+- 「全室」「全館」「完全」「フル」「新築」「新設」「予定」「限定」「無料」など、事実の範囲や程度を変える語を厳密に確認する。
 - 記事に書かれていない情報を勝手にチェック項目へ追加しない。
 - 推測でURL・値・物件名を補わない。
-- 記事末尾の「他のおすすめ物件一覧」やサイト共通ナビなど、記事の主紹介物件ではないリンクは掲載物件として数えない。
-- property_url は記事内に実在する /view/ のURLのみ返す。分からなければ空文字。
-- 記事内で「○月○日時点」等の注記がある場合、その時点情報であることを考慮し、現在値との差だけで即 mismatch にしない。必要なら needs_review。
-- issue_title は「『徒歩10分』と『徒歩11分』の差」「キャンペーン終了日が過ぎています」のように、一目で内容が分かる小見出しにする。
+- ユーザーが指定した物件ページURLがある場合は比較対象として優先する。未指定なら記事内の物件リンクを使う。
+- issue_title は「『徒歩10分』と『徒歩11分』の差」「WebとPDFで家賃が異なります」のように、一目で内容が分かる小見出しにする。
 - location は「学生会館○○／アクセス欄」「記事冒頭／店舗営業日」のように探しやすくする。
-- 画像比較は十分な画像情報を取得できない場合、無理に同一・別物件と断定せず needs_review / not_applicable にする。
+- image_checks は根拠が弱い場合に無理に同一・別物件と断定しない。
 
 最終結果は、記事全体の確認と、物件ごとの確認を分けて返してください。`;
 }
@@ -453,13 +552,17 @@ ${page?.description ? `\nページ説明: ${page.description}` : ''}
 ${instagramUrl ? `【Instagram投稿URL】\n${instagramUrl}\n公開状態で取得可能ならURL Contextでも確認してください。取得できない場合はアップロード素材を優先してください。` : ''}
 
 重要ルール:
+- 画像内の文字、動画の画面内文字・図表を確認する。
+- 動画は1秒ごとにフレーム抽出したコンタクトシートとして渡される。各コマ左上の時刻ラベルを見て判断する。
+- このGitHub Pages版では動画音声は未解析のため、音声由来の断定はしない。
 - 広告コピー・キャッチコピー・見出しも事実確認の対象にする。
-- 「リニューアルオープン」と「フルリニューアルオープン」のように、一語の追加・削除によって意味や訴求範囲が変わる場合は、単なる表記揺れではなく mismatch とする。
+- 「リニューアルオープン」と「フルリニューアルオープン」のように、一語の追加・削除で意味や訴求範囲が変わる場合は表記揺れではなく mismatch とする。
 - 「全室」「全館」「完全」「フル」「新築」「新設」「リニューアル」「オープン」「予定」「限定」「無料」など、事実の範囲・程度・時期を強めたり変えたりする語を厳密に確認する。
-- 年月・日付も広告表現の一部として確認し、「2026年3月リニューアルオープン」のような時期情報の欠落・変更もチェックする。
+- 年月・日付も広告コピーの一部として確認し、「2026年3月リニューアルオープン」のような時期情報の欠落・変更も見逃さない。
 - 動画フレーム内のテロップは、各コマごとに文章として正確に読み取ってから公式情報と比較する。
 - 文字が小さい・ぼやけている等で正確に読めない場合は、一致扱いにせず needs_review とする。
 - 公式情報にない強い表現がInstagram側だけに追加されている場合は mismatch とする。
+- 家賃、共益費、管理費、敷金礼金、間取り、専有面積、最寄駅、徒歩分数、大学までの距離・時間、設備、家具家電、築年月、キャンペーン等、投稿内で事実として表現されている項目を対象にする。
 - Instagramに書かれていない項目を無理にチェック項目へ追加しない。
 - WebとPDFで同じならそれを正とする。WebとPDF自体が矛盾する場合は official_conflict にして、人間確認を促す。
 - 数字・単位・「〜」「より」「最大」「予定」などの条件差も確認する。
@@ -746,12 +849,13 @@ async function fetchWithTimeout(url, options, timeoutMs) {
 function buildArticleResultSchema() {
   const comparisonItem = {
     type: 'object',
-    required: ['label','article_value','reference_value','status','location','issue_title','issue','recommended_value','confidence'],
+    required: ['label','article_value','web_value','pdf_value','status','location','issue_title','issue','recommended_value','confidence'],
     properties: {
       label: { type: 'string' },
       article_value: { type: 'string' },
-      reference_value: { type: 'string' },
-      status: { type: 'string', enum: ['match','mismatch','needs_review','notation_variation'] },
+      web_value: { type: 'string' },
+      pdf_value: { type: 'string' },
+      status: { type: 'string', enum: ['match','mismatch','needs_review','notation_variation','official_conflict'] },
       location: { type: 'string' },
       issue_title: { type: 'string' },
       issue: { type: 'string' },
@@ -797,7 +901,7 @@ function formatArticleResultPayload(result, url) {
   let mismatch = 0, review = 0, match = 0;
   const countItems = items => (items || []).forEach(item => {
     if (item.status === 'mismatch') mismatch += 1;
-    else if (item.status === 'needs_review' || item.status === 'notation_variation') review += 1;
+    else if (item.status === 'needs_review' || item.status === 'notation_variation' || item.status === 'official_conflict') review += 1;
     else if (item.status === 'match') match += 1;
   });
   countItems(articleChecks);
@@ -917,7 +1021,11 @@ function humanizeError(error) {
 }
 
 function estimateProcessingSeconds() {
-  if (currentMode === 'article') return 80;
+  if (currentMode === 'article') {
+    const pdfMb = selectedArticlePdfs.reduce((sum, f) => sum + f.size, 0) / 1024 / 1024;
+    const propertyCount = parseArticlePropertyUrls().length;
+    return Math.max(60, Math.min(420, Math.round(55 + propertyCount * 25 + selectedArticlePdfs.length * 15 + Math.min(80, pdfMb * 0.8))));
+  }
   const pdf = documentInput.files[0];
   const images = selectedMedia.filter(f => f.type.startsWith('image/'));
   const videos = selectedMedia.filter(f => f.type.startsWith('video/'));
@@ -1037,10 +1145,10 @@ function renderArticleResult(data) {
   $('emptyState').classList.add('hidden');
   $('resultContent').classList.add('hidden');
   $('articleResultContent').classList.remove('hidden');
-  $('modeBadge').textContent = 'Web記事 / 複数物件';
+  $('modeBadge').textContent = 'Web記事 / 3ソース照合';
 
   $('articleResultTitle').textContent = data.articleTitle || 'Web記事';
-  $('articleResultOverview').textContent = data.overview || '記事内の物件情報を公式詳細ページと照合しました。';
+  $('articleResultOverview').textContent = data.overview || '記事・物件ページ・PDFの3ソースを照合しました。';
   $('articleResultLink').href = data.articleUrl;
   $('articlePropertyCount').textContent = data.detectedPropertyCount || data.properties.length || 0;
   $('articleMismatchCount').textContent = data.counts.mismatch || 0;
@@ -1068,7 +1176,7 @@ function renderArticleProperties(properties) {
     const issues = items.filter(i => i.status !== 'match');
     const matches = items.filter(i => i.status === 'match');
     const mismatchCount = items.filter(i => i.status === 'mismatch').length;
-    const reviewCount = items.filter(i => i.status === 'needs_review' || i.status === 'notation_variation').length;
+    const reviewCount = items.filter(i => i.status === 'needs_review' || i.status === 'notation_variation' || i.status === 'official_conflict').length;
     const imageChecks = (prop.image_checks || []).filter(i => i.status !== 'not_applicable');
     const safeUrl = isHttpUrl(prop.property_url) ? prop.property_url : '';
     return `<article class="article-property-card">
@@ -1078,7 +1186,7 @@ function renderArticleProperties(properties) {
       </div>
       ${issues.length ? `<div class="article-property-issues">${issues.map(item => renderArticleComparisonRow(item, '記事')).join('')}</div>` : '<div class="article-property-ok">✓ 記事内で確認した物件情報に明確な差分は見つかりませんでした。</div>'}
       ${imageChecks.length ? `<div class="article-image-checks"><strong>掲載画像の確認</strong>${imageChecks.map(img => renderArticleImageCheck(img)).join('')}</div>` : ''}
-      ${matches.length ? `<details class="article-match-details"><summary>一致している項目 ${matches.length}件</summary><div>${matches.map(item => `<span><b>✓ ${escapeHtml(item.label)}</b>${escapeHtml(item.article_value || '')}</span>`).join('')}</div></details>` : ''}
+      ${matches.length ? `<details class="article-match-details"><summary>一致している項目 ${matches.length}件</summary><div>${matches.map(item => `<span><b>✓ ${escapeHtml(item.label)}</b>記事: ${escapeHtml(item.article_value || '')}<br>Web: ${escapeHtml(item.web_value || '')}<br>PDF: ${escapeHtml(item.pdf_value || '')}</span>`).join('')}</div></details>` : ''}
       ${(prop.notes || []).length ? `<ul class="property-notes">${prop.notes.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul>` : ''}
     </article>`;
   }).join('');
@@ -1087,11 +1195,15 @@ function renderArticleProperties(properties) {
 
 function renderArticleComparisonRow(item, sourceLabel) {
   const status = item.status || 'needs_review';
-  const badge = status === 'mismatch' ? '要修正' : status === 'notation_variation' ? '表記を確認' : status === 'match' ? '一致' : '要確認';
-  const cls = status === 'mismatch' ? 'mismatch' : status === 'notation_variation' ? 'notation' : status === 'match' ? 'match' : 'review';
+  const badge = status === 'mismatch' ? '要修正' : status === 'notation_variation' ? '表記を確認' : status === 'official_conflict' ? '公式情報も要確認' : status === 'match' ? '一致' : '要確認';
+  const cls = status === 'mismatch' ? 'mismatch' : status === 'notation_variation' ? 'notation' : status === 'official_conflict' ? 'official-conflict' : status === 'match' ? 'match' : 'review';
   return `<div class="article-check-row ${cls}">
     <div class="article-check-top"><div><strong>${escapeHtml(item.issue_title || item.label || '確認項目')}</strong><small>${escapeHtml(item.location || '')}</small></div><span>${badge}</span></div>
-    <div class="article-compare-grid"><div><small>${escapeHtml(sourceLabel)}</small><strong>${escapeHtml(item.article_value || '不明')}</strong></div><div><small>公式・参照情報</small><strong>${escapeHtml(item.reference_value || '確認できず')}</strong></div></div>
+    <div class="article-compare-grid">
+      <div class="article-source"><small>${escapeHtml(sourceLabel)}</small><strong>${escapeHtml(item.article_value || '不明')}</strong></div>
+      <div><small>物件ページ</small><strong>${escapeHtml(item.web_value || '確認できず')}</strong></div>
+      <div class="pdf-source"><small>PDF</small><strong>${escapeHtml(item.pdf_value || '未添付 / 不明')}</strong></div>
+    </div>
     <p>${escapeHtml(item.issue || '')}</p>
     ${status === 'mismatch' && item.recommended_value ? `<div class="article-fix"><span><small>修正候補</small><strong>${escapeHtml(item.recommended_value)}</strong></span><button class="copy-btn" type="button" data-copy="${escapeAttr(item.recommended_value)}">コピー</button></div>` : ''}
   </div>`;
@@ -1288,6 +1400,21 @@ function readCache(key) {
 }
 function writeCache(key, value, ttlMs) {
   try { localStorage.setItem(key, JSON.stringify({ expiresAt: Date.now() + ttlMs, value })); } catch {}
+}
+function normalizeUrlForCompare(value) {
+  try {
+    const u = new URL(value);
+    u.hash = '';
+    u.search = '';
+    return u.href.replace(/\/$/, '');
+  } catch { return String(value || '').replace(/\/$/, ''); }
+}
+function isUnilifePropertyUrl(value) {
+  try {
+    const u = new URL(value);
+    const h = u.hostname.toLowerCase();
+    return (h === 'unilife.co.jp' || h.endsWith('.unilife.co.jp')) && /^\/view\/\d+\/?$/.test(u.pathname);
+  } catch { return false; }
 }
 function isUnilifeUrl(value) {
   try { const h = new URL(value).hostname.toLowerCase(); return h === 'unilife.co.jp' || h.endsWith('.unilife.co.jp'); } catch { return false; }
