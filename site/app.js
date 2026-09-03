@@ -9,6 +9,8 @@ const pdfFile = $('pdfFile');
 const mediaPreview = $('mediaPreview');
 const submitBtn = $('submitBtn');
 const submitLabel = $('submitLabel');
+const articleUrl = $('articleUrl');
+const modeButtons = [...document.querySelectorAll('.mode-option')];
 
 const CONFIG = window.APP_CONFIG || {};
 const GEMINI_API_KEY = String(CONFIG.GEMINI_API_KEY || '').trim();
@@ -24,6 +26,7 @@ let loadingStartedAt = 0;
 let loadingEstimateSeconds = 60;
 let cooldownTimer = null;
 let cachedPropertyForCurrentUrl = null;
+let currentMode = 'instagram';
 
 class GeminiHttpError extends Error {
   constructor(message, status = 0, retryAfter = 0) {
@@ -45,8 +48,46 @@ function init() {
     notice.classList.remove('hidden');
     notice.innerHTML = messages.join('<br>');
   }
-  $('modeBadge').textContent = 'GitHub Pages / Gemini';
+  setMode('instagram');
 }
+
+
+function idleSubmitLabel() {
+  return currentMode === 'article' ? '記事URLをAIでチェック' : '3つの情報をAIで照合';
+}
+
+function setMode(mode) {
+  currentMode = mode === 'article' ? 'article' : 'instagram';
+  modeButtons.forEach(btn => {
+    const active = btn.dataset.mode === currentMode;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  $('instagramModeFields').classList.toggle('hidden', currentMode !== 'instagram');
+  $('articleModeFields').classList.toggle('hidden', currentMode !== 'article');
+  propertyUrl.required = currentMode === 'instagram';
+  articleUrl.required = currentMode === 'article';
+  $('inputStepBadge').textContent = currentMode === 'article' ? 'URL 1つだけ' : '3つだけ';
+  $('modeBadge').textContent = currentMode === 'article' ? 'Web記事 / 複数物件' : 'Instagram / 3ソース照合';
+  submitLabel.textContent = cooldownTimer ? submitLabel.textContent : idleSubmitLabel();
+  $('resultContent').classList.add('hidden');
+  $('articleResultContent').classList.add('hidden');
+  $('loadingState').classList.add('hidden');
+  $('emptyState').classList.remove('hidden');
+  $('emptyState').innerHTML = currentMode === 'article'
+    ? '<div class="empty-graphic article"><span>ARTICLE</span><span>→</span><span>PROPERTY</span><b>✓</b></div><h3>記事のチェック結果はここに表示されます</h3><p>記事URLを1つ入れるだけで、<br>掲載物件を分けて公式ページと照合します。</p>'
+    : '<div class="empty-graphic"><span>WEB</span><span>PDF</span><span>SNS</span><b>✓</b></div><h3>チェック結果はここに表示されます</h3><p>左の3つの情報を追加して、<br>「AIで照合」を押してください。</p>';
+  updateLoadingStepLabels();
+}
+
+function updateLoadingStepLabels() {
+  const labels = currentMode === 'article'
+    ? ['記事取得', '掲載物件検出', '公式ページ確認', '差分照合']
+    : ['情報取得', 'PDF確認', '画像・動画解析', '差分照合'];
+  document.querySelectorAll('#loadingSteps [data-stage]').forEach((el, idx) => { el.textContent = labels[idx] || ''; });
+}
+
+modeButtons.forEach(btn => btn.addEventListener('click', () => setMode(btn.dataset.mode)));
 
 function stopDefaults(e) { e.preventDefault(); e.stopPropagation(); }
 
@@ -136,14 +177,42 @@ function showPropertyPreview(html, isError = false) {
 
 propertyUrl.addEventListener('input', () => { cachedPropertyForCurrentUrl = null; });
 
+
+articleUrl.addEventListener('input', () => {
+  $('articlePreview').classList.add('hidden');
+});
+
+$('previewArticleBtn').addEventListener('click', () => {
+  const url = articleUrl.value.trim();
+  const el = $('articlePreview');
+  el.classList.remove('hidden');
+  if (!url) {
+    el.classList.add('error');
+    el.innerHTML = 'URLを入力してください。';
+    return;
+  }
+  if (!isUnilifeUrl(url)) {
+    el.classList.add('error');
+    el.innerHTML = 'UniLifeの公開記事URLを入力してください。';
+    return;
+  }
+  el.classList.remove('error');
+  el.innerHTML = '<span>✓</span><div><strong>記事URLを確認しました</strong><small>AIチェック時に記事内の物件リンクを自動検出します。</small></div>';
+});
+
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (!ensureApiKey()) return;
+  if (currentMode === 'article') return runArticleCheck();
+  return runInstagramCheck();
+});
+
+async function runInstagramCheck() {
   const url = propertyUrl.value.trim();
   const instagramUrl = $('instagramUrl').value.trim();
   if (!url) return alert('UniLifeの物件ページURLを入力してください。');
   if (!isUnilifeUrl(url)) return alert('UniLifeの物件詳細ページURLを入力してください。');
   if (!selectedMedia.length && !instagramUrl) return alert('Instagramへ投稿予定の画像または動画を追加してください。');
-  if (!ensureApiKey()) return;
 
   const videos = selectedMedia.filter(f => f.type.startsWith('video/'));
   const images = selectedMedia.filter(f => f.type.startsWith('image/'));
@@ -176,7 +245,10 @@ form.addEventListener('submit', async (e) => {
         const duration = await getVideoDuration(file);
         setStage(2, `動画を1秒ごとに分解しています…（${file.name}）`);
         const videoParts = await videoToGeminiContents(file, duration);
-        mediaContents.push({ type: 'text', text: `【Instagram投稿予定 動画${videoIndex}: ${file.name}】長さ ${duration ? duration.toFixed(1) : '?'}秒。動画は1秒ごとにフレームを抽出し、16コマずつまとめたコンタクトシートとして添付しています。各コマ左上の時刻（mm:ss）を見て、修正箇所はタイムスタンプ付きで示してください。音声はこのGitHub Pages版では未解析なので、映像内テロップ・画面情報・見た目を中心に確認してください。` });
+        mediaContents.push({
+          type: 'text',
+          text: `【Instagram投稿予定 動画${videoIndex}: ${file.name}】長さ ${duration ? duration.toFixed(1) : '?'}秒。動画は1秒ごとにフレームを抽出し、9コマずつまとめた高解像度コンタクトシートとして添付しています。各コマ左上の時刻（mm:ss）を見て、修正箇所はタイムスタンプ付きで示してください。このGitHub Pages版では動画音声は未解析なので、映像内テロップ・画面情報・見た目を中心に確認してください。`
+        });
         mediaContents.push(...videoParts);
         setStage(2, 'Instagramの画像・動画を準備しています…');
       }
@@ -194,21 +266,182 @@ form.addEventListener('submit', async (e) => {
     const data = formatResultPayload(result, page, document, selectedMedia);
     renderResult(data);
   } catch (error) {
-    handlePossibleRateLimit(error);
-    $('loadingState').classList.add('hidden');
-    $('emptyState').classList.remove('hidden');
-    $('emptyState').innerHTML = `<div class="empty-graphic error">!</div><h3>チェックできませんでした</h3><p>${escapeHtml(humanizeError(error))}</p>`;
+    renderCheckError(error);
   } finally {
     setLoading(false, true);
   }
-});
+}
+
+async function runArticleCheck() {
+  const url = articleUrl.value.trim();
+  if (!url) return alert('チェックしたい記事URLを入力してください。');
+  if (!isUnilifeUrl(url)) return alert('UniLifeの公開記事URLを入力してください。');
+
+  setLoading(true);
+  try {
+    setStage(0, '記事ページの内容を確認しています…');
+    const outline = await resolveArticleOutline(url);
+
+    setStage(1, `${outline.properties.length}件の掲載物件を検出しました。リンクを整理しています…`);
+    const today = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const prompt = buildArticleAnalysisPrompt(url, today, outline);
+
+    setStage(2, '掲載物件の公式詳細ページを確認しています…');
+    const result = await callGeminiJson({
+      model: GEMINI_MODEL,
+      input: [{ type: 'text', text: prompt }],
+      tools: [{ type: 'url_context' }],
+      response_format: { type: 'text', mime_type: 'application/json', schema: buildArticleResultSchema() }
+    }, 360_000);
+
+    setStage(3, '記事と各物件の公式情報を照合しています…');
+    const data = formatArticleResultPayload(result, url);
+    if (!data.articleTitle && outline.title) data.articleTitle = outline.title;
+    if (!data.overview && outline.overview) data.overview = outline.overview;
+    renderArticleResult(data);
+  } catch (error) {
+    renderCheckError(error);
+  } finally {
+    setLoading(false, true);
+  }
+}
+
+async function resolveArticleOutline(url) {
+  const cacheKey = `unilife-article-outline::${url}`;
+  const cached = readCache(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const direct = await fetchArticleOutlineDirect(url);
+    if (direct.properties.length) {
+      writeCache(cacheKey, direct, PROPERTY_CACHE_TTL_MS);
+      return direct;
+    }
+  } catch {}
+
+  const result = await callGeminiJson({
+    model: GEMINI_MODEL,
+    input: [{ type: 'text', text: `次のUniLife記事をURL Contextで開いてください。記事の主本文で紹介されている物件だけを特定し、記事内に実在する https://unilife.co.jp/view/... 形式のリンクを正確に抽出してください。サイト共通ナビ、関連記事、検索一覧へのリンクは除外してください。URLを推測・生成しないでください。\n\n記事URL: ${url}` }],
+    tools: [{ type: 'url_context' }],
+    response_format: { type: 'text', mime_type: 'application/json', schema: buildArticleOutlineSchema() }
+  }, 180_000);
+  const outline = {
+    title: result.article_title || '',
+    overview: result.article_overview || '',
+    text: '',
+    properties: (result.properties || []).filter(p => isHttpUrl(p.property_url) && isUnilifeUrl(p.property_url)).slice(0, 20),
+    via: 'url_context'
+  };
+  writeCache(cacheKey, outline, PROPERTY_CACHE_TTL_MS);
+  return outline;
+}
+
+async function fetchArticleOutlineDirect(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(url, { signal: controller.signal, mode: 'cors', redirect: 'follow' });
+    if (!response.ok) throw new Error(`ARTICLE_HTTP_${response.status}`);
+    const html = await response.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const title = doc.querySelector('h1,h2,h3')?.textContent?.trim() || doc.querySelector('title')?.textContent?.trim() || '';
+    const description = doc.querySelector('meta[name="description"]')?.getAttribute('content')?.trim() || '';
+    const links = [];
+    doc.querySelectorAll('a[href]').forEach(anchor => {
+      const href = toAbsoluteUrl(anchor.getAttribute('href'), url);
+      if (!/^https?:\/\/(?:www\.)?unilife\.co\.jp\/view\/\d+\/?(?:[?#].*)?$/i.test(href)) return;
+      const propertyName = normalizeText(anchor.textContent || '').slice(0, 160);
+      if (!links.some(item => item.property_url === href)) links.push({ property_name: propertyName, property_url: href, article_location: propertyName || '記事本文' });
+    });
+    return { title, overview: description, text: normalizeText(doc.body?.innerText || '').slice(0, 55000), properties: links.slice(0, 20), via: 'direct' };
+  } finally { clearTimeout(timer); }
+}
+
+function buildArticleOutlineSchema() {
+  return {
+    type: 'object',
+    required: ['article_title','article_overview','properties'],
+    properties: {
+      article_title: { type: 'string' },
+      article_overview: { type: 'string' },
+      properties: {
+        type: 'array', items: {
+          type: 'object', required: ['property_name','property_url','article_location'],
+          properties: { property_name: { type: 'string' }, property_url: { type: 'string' }, article_location: { type: 'string' } }
+        }
+      }
+    }
+  };
+}
+
+function renderCheckError(error) {
+  handlePossibleRateLimit(error);
+  $('loadingState').classList.add('hidden');
+  $('resultContent').classList.add('hidden');
+  $('articleResultContent').classList.add('hidden');
+  $('emptyState').classList.remove('hidden');
+  $('emptyState').innerHTML = `<div class="empty-graphic error">!</div><h3>チェックできませんでした</h3><p>${escapeHtml(humanizeError(error))}</p>`;
+}
+
+function buildArticleAnalysisPrompt(url, today, outline) {
+  return `あなたはUniLifeのWeb記事・物件情報校正アシスタントです。
+次のUniLife公開記事をURL Contextで必ず開き、記事内に掲載されている物件情報を各公式物件詳細ページと照合してください。
+
+【チェック対象の記事URL】
+${url}
+
+【今日の日付（日本時間）】
+${today}
+
+【記事から検出した主紹介物件】
+${outline.properties.length ? outline.properties.map((p, i) => `${i + 1}. ${p.property_name || '物件名不明'}
+   ${p.property_url}
+   記事内位置: ${p.article_location || '不明'}`).join('\n') : '物件詳細リンクを事前抽出できませんでした。記事本文を確認し、推測せず判定してください。'}
+${outline.text ? `\n【ブラウザから取得した記事本文の補助テキスト】\n${outline.text.slice(0, 45000)}` : ''}
+
+手順:
+1. 記事本文を読み、記事の主コンテンツ内で紹介されている物件をすべて特定する。
+2. 上の「記事から検出した主紹介物件」にURLがある場合、そのURLを対象物件の公式詳細ページとして使う。記事本文から別の /view/ URLを追加する場合は、記事の主紹介物件であることが明確なものだけにする。
+3. URL Contextを使い、列挙された各物件詳細URLを実際に開いて確認する。
+4. 記事に書かれている情報と、その物件の公式詳細ページの現在の公開情報を項目ごとに比較する。
+5. 記事全体に関するキャンペーン期間・店舗営業日・広告有効期限・完成予定時期など、時間経過で古くなる情報も確認する。
+6. 記事に複数物件がある場合は、文章・画像・設備情報を必ず物件ごとに分け、別物件の情報を混ぜない。
+
+チェック対象:
+- 物件名、住所
+- 家賃・共益費・管理費・敷金礼金・入館金などの費用
+- 間取り、専有面積、完成年月・築年月
+- 駅・バス停までの徒歩分数
+- 大学までの徒歩分数・通学情報
+- オートロック、防犯カメラ、宅配BOX、家具家電、食事、ネット無料などの設備・サービス
+- キャンペーン名、対象者、期間、割引内容
+- 空室・募集状況に関する断定表現
+- 記事内画像と公式物件ページ画像の整合性（URL Contextで視覚的根拠を十分確認できる場合のみ）
+- 店舗営業日、広告有効期限、日付・曜日の論理的な矛盾
+
+判定ルール:
+- match: 記事と公式物件ページが一致。
+- mismatch: 記事の記載が公式物件ページと明確に異なり、修正候補を示せる。
+- notation_variation: 意味は同じで表記のみ異なる。「『A』と『B』の表記揺れ」のような小見出しにする。
+- needs_review: 公式側に記載がない、URL Contextで確認できない、画像判断の根拠が弱い、情報が時点依存など、人の確認が必要。
+- 記事に書かれていない情報を勝手にチェック項目へ追加しない。
+- 推測でURL・値・物件名を補わない。
+- 記事末尾の「他のおすすめ物件一覧」やサイト共通ナビなど、記事の主紹介物件ではないリンクは掲載物件として数えない。
+- property_url は記事内に実在する /view/ のURLのみ返す。分からなければ空文字。
+- 記事内で「○月○日時点」等の注記がある場合、その時点情報であることを考慮し、現在値との差だけで即 mismatch にしない。必要なら needs_review。
+- issue_title は「『徒歩10分』と『徒歩11分』の差」「キャンペーン終了日が過ぎています」のように、一目で内容が分かる小見出しにする。
+- location は「学生会館○○／アクセス欄」「記事冒頭／店舗営業日」のように探しやすくする。
+- 画像比較は十分な画像情報を取得できない場合、無理に同一・別物件と断定せず needs_review / not_applicable にする。
+
+最終結果は、記事全体の確認と、物件ごとの確認を分けて返してください。`;
+}
 
 async function buildAnalysisInput({ page, propertyUrl, instagramUrl, document, pdfContent, mediaContents }) {
   const input = [];
   input.push({
     type: 'text',
     text: `あなたはUniLifeの不動産広告・SNSクリエイティブ校正アシスタントです。
-公式Webページと物件詳細PDFを一次情報として、Instagramへ投稿予定の画像・動画内に表示・発話されている物件情報を照合してください。
+公式Webページと物件詳細PDFを一次情報として、Instagramへ投稿予定の画像・動画内に表示されている物件情報を照合してください。
 
 【公式WebページURL】
 ${propertyUrl}
@@ -220,10 +453,13 @@ ${page?.description ? `\nページ説明: ${page.description}` : ''}
 ${instagramUrl ? `【Instagram投稿URL】\n${instagramUrl}\n公開状態で取得可能ならURL Contextでも確認してください。取得できない場合はアップロード素材を優先してください。` : ''}
 
 重要ルール:
-- 画像内の文字、動画の画面内文字・図表を確認する。
-- 動画は1秒ごとにフレーム抽出したコンタクトシートとして渡される。各コマ左上の時刻ラベルを見て判断する。
-- このGitHub Pages版では動画音声は未解析のため、音声由来の断定はしない。
-- 家賃、共益費、管理費、敷金礼金、間取り、専有面積、最寄駅、徒歩分数、大学までの距離・時間、設備、家具家電、築年月、キャンペーン等、投稿内で事実として表現されている項目を対象にする。
+- 広告コピー・キャッチコピー・見出しも事実確認の対象にする。
+- 「リニューアルオープン」と「フルリニューアルオープン」のように、一語の追加・削除によって意味や訴求範囲が変わる場合は、単なる表記揺れではなく mismatch とする。
+- 「全室」「全館」「完全」「フル」「新築」「新設」「リニューアル」「オープン」「予定」「限定」「無料」など、事実の範囲・程度・時期を強めたり変えたりする語を厳密に確認する。
+- 年月・日付も広告表現の一部として確認し、「2026年3月リニューアルオープン」のような時期情報の欠落・変更もチェックする。
+- 動画フレーム内のテロップは、各コマごとに文章として正確に読み取ってから公式情報と比較する。
+- 文字が小さい・ぼやけている等で正確に読めない場合は、一致扱いにせず needs_review とする。
+- 公式情報にない強い表現がInstagram側だけに追加されている場合は mismatch とする。
 - Instagramに書かれていない項目を無理にチェック項目へ追加しない。
 - WebとPDFで同じならそれを正とする。WebとPDF自体が矛盾する場合は official_conflict にして、人間確認を促す。
 - 数字・単位・「〜」「より」「最大」「予定」などの条件差も確認する。
@@ -237,7 +473,7 @@ ${instagramUrl ? `【Instagram投稿URL】\n${instagramUrl}\n公開状態で取�
 - issue_title は「家賃が公式情報より2,000円低い」のように一目で分かる具体的な小見出しにする。
 - image_checks の official_reference には「公式Web画像2」「PDF 3ページの外観写真」のように、担当者が探せる表現を書く。
 - 画像判定の confidence が low の場合は、明確な別物件の証拠がない限り needs_review とする。
-- location には「画像2」「動画 00:06」「動画音声」など、修正箇所を探しやすい位置を書く。
+- location には「画像2」「動画 00:06」など、修正箇所を探しやすい位置を書く。
 - recommended_value は公式情報に基づく修正候補。公式側が矛盾している場合は「要確認」。`
   });
 
@@ -342,28 +578,72 @@ async function fileToGeminiContent(file, kind) {
   return { type: kind, uri: uploaded.uri, mime_type: uploaded.mime_type || normalizedMime(file, kind) };
 }
 
-async function videoToGeminiContents(file, duration) {
-  const frames = await extractFramesEverySecond(file, duration);
-  const sheets = await buildContactSheetsFromFrames(frames, {
-    columns: 4,
-    rows: 4,
-    cellWidth: 320,
-    cellHeight: 180,
-    quality: 0.86
-  });
-  const parts = [];
-  sheets.forEach((sheet, index) => {
-    parts.push({
-      type: 'text',
-      text: `動画コンタクトシート ${index + 1}/${sheets.length}（${sheet.startLabel}〜${sheet.endLabel}、${sheet.frameCount}コマ）`
-    });
-    parts.push({
-      type: 'image',
-      data: sheet.base64,
-      mime_type: 'image/jpeg'
-    });
-  });
-  return parts;
+async function videoToGeminiContents(file, durationHint = 0) {
+  const { video, url } = await loadVideoForFrameExtraction(file);
+  try {
+    const duration = durationHint || (Number.isFinite(video.duration) ? video.duration : 0);
+    if (!duration || duration <= 0) throw new Error('動画の長さを取得できませんでした。');
+
+    const totalFrames = Math.max(1, Math.ceil(duration));
+
+    // 1秒ごとの抽出は維持しつつ、
+    // 文字を読みやすくするため1枚あたり9コマに減らす
+    const framesPerSheet = 9;
+
+    const isVertical = (video.videoHeight || 0) > (video.videoWidth || 0);
+
+    const columns = 3;
+    const rows = 3;
+
+    // 1コマを大きくする
+    const cellWidth = isVertical ? 360 : 426;
+    const cellHeight = isVertical ? 640 : 240;
+
+    const quality = 0.90;
+    const parts = [];
+
+    for (let start = 0; start < totalFrames; start += framesPerSheet) {
+      const count = Math.min(framesPerSheet, totalFrames - start);
+      const canvas = document.createElement('canvas');
+      canvas.width = columns * cellWidth;
+      canvas.height = rows * cellHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      let firstLabel = '';
+      let lastLabel = '';
+      for (let localIndex = 0; localIndex < count; localIndex += 1) {
+        const second = start + localIndex;
+        const seekTime = Math.min(second + 0.05, Math.max(0.05, duration - 0.05));
+        await seekVideo(video, seekTime);
+
+        const label = formatVideoTime(second);
+        if (!firstLabel) firstLabel = label;
+        lastLabel = label;
+
+        const col = localIndex % columns;
+        const row = Math.floor(localIndex / columns);
+        const x = col * cellWidth;
+        const y = row * cellHeight;
+        drawVideoIntoCell(ctx, video, x, y, cellWidth, cellHeight);
+        drawFrameLabel(ctx, label, x, y);
+      }
+
+      const base64 = await canvasToBase64(canvas, quality);
+      const sheetNo = Math.floor(start / framesPerSheet) + 1;
+      const sheetTotal = Math.ceil(totalFrames / framesPerSheet);
+      parts.push({
+        type: 'text',
+        text: `動画コンタクトシート ${sheetNo}/${sheetTotal}（${firstLabel}〜${lastLabel}、${count}コマ）`
+      });
+      parts.push({ type: 'image', data: base64, mime_type: 'image/jpeg' });
+    }
+
+    return parts;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 async function uploadFileToGemini(file) {
@@ -419,8 +699,8 @@ async function callGeminiJson(payload, timeoutMs = 240_000) {
     method: 'POST',
     headers: {
       'x-goog-api-key': GEMINI_API_KEY,
-      'Content-Type': 'application/json',
-          },
+      'Content-Type': 'application/json'
+    },
     body: JSON.stringify(payload)
   }, timeoutMs);
   if (!response.ok) throw await geminiResponseError(response);
@@ -461,6 +741,77 @@ async function fetchWithTimeout(url, options, timeoutMs) {
     if (error?.name === 'AbortError') throw new Error('AI_TIMEOUT');
     throw error;
   } finally { clearTimeout(timer); }
+}
+
+function buildArticleResultSchema() {
+  const comparisonItem = {
+    type: 'object',
+    required: ['label','article_value','reference_value','status','location','issue_title','issue','recommended_value','confidence'],
+    properties: {
+      label: { type: 'string' },
+      article_value: { type: 'string' },
+      reference_value: { type: 'string' },
+      status: { type: 'string', enum: ['match','mismatch','needs_review','notation_variation'] },
+      location: { type: 'string' },
+      issue_title: { type: 'string' },
+      issue: { type: 'string' },
+      recommended_value: { type: 'string' },
+      confidence: { type: 'string', enum: ['high','medium','low'] }
+    }
+  };
+  const imageCheck = {
+    type: 'object',
+    required: ['article_location','article_description','official_reference','status','reason','confidence'],
+    properties: {
+      article_location: { type: 'string' }, article_description: { type: 'string' }, official_reference: { type: 'string' },
+      status: { type: 'string', enum: ['same_image','same_property_likely','needs_review','different_property_likely','not_applicable'] },
+      reason: { type: 'string' }, confidence: { type: 'string', enum: ['high','medium','low'] }
+    }
+  };
+  return {
+    type: 'object',
+    required: ['article_title','article_overview','detected_property_count','article_checks','properties','overall_notes'],
+    properties: {
+      article_title: { type: 'string' },
+      article_overview: { type: 'string' },
+      detected_property_count: { type: 'integer' },
+      article_checks: { type: 'array', items: comparisonItem },
+      properties: {
+        type: 'array', items: {
+          type: 'object',
+          required: ['property_name','property_url','article_location','summary','items','image_checks','notes'],
+          properties: {
+            property_name: { type: 'string' }, property_url: { type: 'string' }, article_location: { type: 'string' }, summary: { type: 'string' },
+            items: { type: 'array', items: comparisonItem }, image_checks: { type: 'array', items: imageCheck }, notes: { type: 'array', items: { type: 'string' } }
+          }
+        }
+      },
+      overall_notes: { type: 'array', items: { type: 'string' } }
+    }
+  };
+}
+
+function formatArticleResultPayload(result, url) {
+  const properties = Array.isArray(result?.properties) ? result.properties : [];
+  const articleChecks = Array.isArray(result?.article_checks) ? result.article_checks : [];
+  let mismatch = 0, review = 0, match = 0;
+  const countItems = items => (items || []).forEach(item => {
+    if (item.status === 'mismatch') mismatch += 1;
+    else if (item.status === 'needs_review' || item.status === 'notation_variation') review += 1;
+    else if (item.status === 'match') match += 1;
+  });
+  countItems(articleChecks);
+  properties.forEach(prop => countItems(prop.items));
+  return {
+    articleUrl: url,
+    articleTitle: result?.article_title || 'Web記事',
+    overview: result?.article_overview || '',
+    detectedPropertyCount: Number(result?.detected_property_count ?? properties.length),
+    articleChecks,
+    properties,
+    overallNotes: Array.isArray(result?.overall_notes) ? result.overall_notes : [],
+    counts: { mismatch, review, match }
+  };
 }
 
 function buildResultSchema() {
@@ -542,7 +893,7 @@ function startCooldown(seconds) {
     submitLabel.textContent = `再試行まで ${formatClock(left)}`;
     if (left <= 0) {
       clearInterval(cooldownTimer); cooldownTimer = null;
-      submitBtn.disabled = false; submitLabel.textContent = '3つの情報をAIで照合';
+      submitBtn.disabled = false; submitLabel.textContent = idleSubmitLabel();
       notice.innerHTML = '<strong>再試行できます。</strong> 同じ素材ならそのままもう一度チェックしてください。';
       return;
     }
@@ -566,6 +917,7 @@ function humanizeError(error) {
 }
 
 function estimateProcessingSeconds() {
+  if (currentMode === 'article') return 80;
   const pdf = documentInput.files[0];
   const images = selectedMedia.filter(f => f.type.startsWith('image/'));
   const videos = selectedMedia.filter(f => f.type.startsWith('video/'));
@@ -628,10 +980,13 @@ function setStage(stage, label) {
 
 function setLoading(on, preserveResult = false) {
   if (!cooldownTimer) submitBtn.disabled = on;
-  submitLabel.textContent = on ? 'チェック中…' : (cooldownTimer ? submitLabel.textContent : '3つの情報をAIで照合');
+  submitLabel.textContent = on ? 'チェック中…' : (cooldownTimer ? submitLabel.textContent : idleSubmitLabel());
   if (on) {
     $('emptyState').classList.add('hidden');
     $('resultContent').classList.add('hidden');
+    $('articleResultContent').classList.add('hidden');
+    $('loadingTitle').textContent = currentMode === 'article' ? '記事と掲載物件を確認しています' : '画像・動画まで確認しています';
+    updateLoadingStepLabels();
     $('loadingState').classList.remove('hidden');
     startLoadingEstimate();
   } else {
@@ -643,7 +998,9 @@ function setLoading(on, preserveResult = false) {
 function renderResult(data) {
   $('loadingState').classList.add('hidden');
   $('emptyState').classList.add('hidden');
+  $('articleResultContent').classList.add('hidden');
   $('resultContent').classList.remove('hidden');
+  $('modeBadge').textContent = 'Instagram / 3ソース照合';
 
   $('propertyName').textContent = data.property?.title || '物件情報';
   $('propertyDesc').textContent = data.property?.description || 'UniLife物件ページ・PDF・Instagram素材を照合しました。';
@@ -673,6 +1030,76 @@ function renderResult(data) {
 
   $('mediaOverview').textContent = data.result.media_overview || '';
   $('overallNotes').innerHTML = (data.result.overall_notes || []).map(n => `<li>${escapeHtml(n)}</li>`).join('');
+}
+
+function renderArticleResult(data) {
+  $('loadingState').classList.add('hidden');
+  $('emptyState').classList.add('hidden');
+  $('resultContent').classList.add('hidden');
+  $('articleResultContent').classList.remove('hidden');
+  $('modeBadge').textContent = 'Web記事 / 複数物件';
+
+  $('articleResultTitle').textContent = data.articleTitle || 'Web記事';
+  $('articleResultOverview').textContent = data.overview || '記事内の物件情報を公式詳細ページと照合しました。';
+  $('articleResultLink').href = data.articleUrl;
+  $('articlePropertyCount').textContent = data.detectedPropertyCount || data.properties.length || 0;
+  $('articleMismatchCount').textContent = data.counts.mismatch || 0;
+  $('articleReviewCount').textContent = data.counts.review || 0;
+
+  renderArticleGeneralChecks(data.articleChecks || []);
+  renderArticleProperties(data.properties || []);
+  $('articleOverallNotes').innerHTML = (data.overallNotes || []).map(note => `<li>${escapeHtml(note)}</li>`).join('');
+}
+
+function renderArticleGeneralChecks(items) {
+  $('articleGeneralSection').classList.toggle('hidden', items.length === 0);
+  $('articleGeneralBadge').textContent = `${items.length}件`;
+  $('articleGeneralList').innerHTML = items.map(item => renderArticleComparisonRow(item, '記事全体')).join('');
+}
+
+function renderArticleProperties(properties) {
+  $('articlePropertiesBadge').textContent = `${properties.length}物件`;
+  if (!properties.length) {
+    $('articlePropertiesList').innerHTML = '<div class="article-no-property"><strong>記事内の物件詳細リンクを特定できませんでした</strong><p>記事内に /view/ の物件リンクがない、またはAIがリンクを確認できなかった可能性があります。人の確認が必要です。</p></div>';
+    return;
+  }
+  $('articlePropertiesList').innerHTML = properties.map((prop, propIndex) => {
+    const items = Array.isArray(prop.items) ? prop.items : [];
+    const issues = items.filter(i => i.status !== 'match');
+    const matches = items.filter(i => i.status === 'match');
+    const mismatchCount = items.filter(i => i.status === 'mismatch').length;
+    const reviewCount = items.filter(i => i.status === 'needs_review' || i.status === 'notation_variation').length;
+    const imageChecks = (prop.image_checks || []).filter(i => i.status !== 'not_applicable');
+    const safeUrl = isHttpUrl(prop.property_url) ? prop.property_url : '';
+    return `<article class="article-property-card">
+      <div class="article-property-head">
+        <div><span class="property-seq">PROPERTY ${propIndex + 1}</span><h4>${escapeHtml(prop.property_name || `物件${propIndex + 1}`)}</h4><p>${escapeHtml(prop.summary || prop.article_location || '')}</p></div>
+        <div class="property-actions"><span class="mini-status warn">要修正 ${mismatchCount}</span><span class="mini-status review">要確認 ${reviewCount}</span>${safeUrl ? `<a href="${escapeAttr(safeUrl)}" target="_blank" rel="noopener">公式ページ ↗</a>` : ''}</div>
+      </div>
+      ${issues.length ? `<div class="article-property-issues">${issues.map(item => renderArticleComparisonRow(item, '記事')).join('')}</div>` : '<div class="article-property-ok">✓ 記事内で確認した物件情報に明確な差分は見つかりませんでした。</div>'}
+      ${imageChecks.length ? `<div class="article-image-checks"><strong>掲載画像の確認</strong>${imageChecks.map(img => renderArticleImageCheck(img)).join('')}</div>` : ''}
+      ${matches.length ? `<details class="article-match-details"><summary>一致している項目 ${matches.length}件</summary><div>${matches.map(item => `<span><b>✓ ${escapeHtml(item.label)}</b>${escapeHtml(item.article_value || '')}</span>`).join('')}</div></details>` : ''}
+      ${(prop.notes || []).length ? `<ul class="property-notes">${prop.notes.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul>` : ''}
+    </article>`;
+  }).join('');
+  $('articlePropertiesList').querySelectorAll('.copy-btn').forEach(btn => btn.addEventListener('click', () => copyText(btn.dataset.copy, btn)));
+}
+
+function renderArticleComparisonRow(item, sourceLabel) {
+  const status = item.status || 'needs_review';
+  const badge = status === 'mismatch' ? '要修正' : status === 'notation_variation' ? '表記を確認' : status === 'match' ? '一致' : '要確認';
+  const cls = status === 'mismatch' ? 'mismatch' : status === 'notation_variation' ? 'notation' : status === 'match' ? 'match' : 'review';
+  return `<div class="article-check-row ${cls}">
+    <div class="article-check-top"><div><strong>${escapeHtml(item.issue_title || item.label || '確認項目')}</strong><small>${escapeHtml(item.location || '')}</small></div><span>${badge}</span></div>
+    <div class="article-compare-grid"><div><small>${escapeHtml(sourceLabel)}</small><strong>${escapeHtml(item.article_value || '不明')}</strong></div><div><small>公式・参照情報</small><strong>${escapeHtml(item.reference_value || '確認できず')}</strong></div></div>
+    <p>${escapeHtml(item.issue || '')}</p>
+    ${status === 'mismatch' && item.recommended_value ? `<div class="article-fix"><span><small>修正候補</small><strong>${escapeHtml(item.recommended_value)}</strong></span><button class="copy-btn" type="button" data-copy="${escapeAttr(item.recommended_value)}">コピー</button></div>` : ''}
+  </div>`;
+}
+
+function renderArticleImageCheck(item) {
+  const meta = imageStatusMeta(item.status);
+  return `<div class="article-image-row"><div><strong>${escapeHtml(item.article_location || '記事内画像')}</strong><small>${escapeHtml(item.article_description || '')}</small></div><span class="image-status ${meta.className}">${meta.label}</span><p><b>${escapeHtml(item.official_reference || '公式画像')}</b><br>${escapeHtml(item.reason || '')}</p></div>`;
 }
 
 function renderMismatch(items) {
@@ -740,7 +1167,6 @@ async function copyText(text, btn) {
 $('helpBtn').addEventListener('click', () => $('helpDialog').showModal());
 $('closeHelp').addEventListener('click', () => $('helpDialog').close());
 
-
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -750,72 +1176,6 @@ function fileToBase64(file) {
   });
 }
 
-async function extractFramesEverySecond(file, durationHint = 0) {
-  const meta = await loadVideoForFrameExtraction(file);
-  const { video, url } = meta;
-  try {
-    const duration = durationHint || (Number.isFinite(video.duration) ? video.duration : 0);
-    const wholeSeconds = Math.max(1, Math.ceil(duration));
-    const times = [];
-    for (let sec = 0; sec < wholeSeconds; sec += 1) {
-      const safeTime = Math.min(sec + 0.05, Math.max(0.05, duration > 0 ? duration - 0.05 : sec + 0.05));
-      times.push(safeTime);
-    }
-    if (!times.length) times.push(0.05);
-
-    const frames = [];
-    for (const timeSec of times) {
-      await seekVideo(video, timeSec);
-      const frameCanvas = drawVideoFrame(video, 1280, 720);
-      frames.push({
-        timeSec,
-        label: formatVideoTime(timeSec),
-        canvas: frameCanvas
-      });
-    }
-    return frames;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-async function buildContactSheetsFromFrames(frames, options = {}) {
-  const columns = options.columns || 4;
-  const rows = options.rows || 4;
-  const cellWidth = options.cellWidth || 320;
-  const cellHeight = options.cellHeight || 180;
-  const quality = options.quality || 0.86;
-  const framesPerSheet = columns * rows;
-  const sheets = [];
-
-  for (let offset = 0; offset < frames.length; offset += framesPerSheet) {
-    const chunk = frames.slice(offset, offset + framesPerSheet);
-    const canvas = document.createElement('canvas');
-    canvas.width = columns * cellWidth;
-    canvas.height = rows * cellHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    chunk.forEach((frame, index) => {
-      const col = index % columns;
-      const row = Math.floor(index / columns);
-      const x = col * cellWidth;
-      const y = row * cellHeight;
-      drawFrameIntoCell(ctx, frame.canvas, x, y, cellWidth, cellHeight);
-      drawFrameLabel(ctx, frame.label, x, y, cellWidth);
-    });
-
-    sheets.push({
-      base64: await canvasToBase64(canvas, quality),
-      startLabel: chunk[0]?.label || '00:00',
-      endLabel: chunk[chunk.length - 1]?.label || chunk[0]?.label || '00:00',
-      frameCount: chunk.length
-    });
-  }
-  return sheets;
-}
-
 function loadVideoForFrameExtraction(file) {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
@@ -823,7 +1183,6 @@ function loadVideoForFrameExtraction(file) {
     video.preload = 'auto';
     video.muted = true;
     video.playsInline = true;
-    video.crossOrigin = 'anonymous';
     video.onloadedmetadata = () => resolve({ video, url });
     video.onerror = () => {
       URL.revokeObjectURL(url);
@@ -852,53 +1211,38 @@ function seekVideo(video, timeSec) {
   });
 }
 
-function drawVideoFrame(video, maxWidth = 1280, maxHeight = 720) {
-  const sourceWidth = video.videoWidth || 1280;
-  const sourceHeight = video.videoHeight || 720;
-  const scale = Math.min(1, maxWidth / sourceWidth, maxHeight / sourceHeight);
-  const width = Math.max(1, Math.round(sourceWidth * scale));
-  const height = Math.max(1, Math.round(sourceHeight * scale));
-  const canvas = document.createElement('canvas');
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(video, 0, 0, width, height);
-  return canvas;
-}
-
-function drawFrameIntoCell(ctx, frameCanvas, x, y, cellWidth, cellHeight) {
+function drawVideoIntoCell(ctx, video, x, y, cellWidth, cellHeight) {
   ctx.fillStyle = '#111827';
   ctx.fillRect(x, y, cellWidth, cellHeight);
-  const scale = Math.min(cellWidth / frameCanvas.width, cellHeight / frameCanvas.height);
-  const drawWidth = Math.round(frameCanvas.width * scale);
-  const drawHeight = Math.round(frameCanvas.height * scale);
+  const sourceWidth = video.videoWidth || cellWidth;
+  const sourceHeight = video.videoHeight || cellHeight;
+  const scale = Math.min(cellWidth / sourceWidth, cellHeight / sourceHeight);
+  const drawWidth = Math.round(sourceWidth * scale);
+  const drawHeight = Math.round(sourceHeight * scale);
   const drawX = x + Math.round((cellWidth - drawWidth) / 2);
   const drawY = y + Math.round((cellHeight - drawHeight) / 2);
-  ctx.drawImage(frameCanvas, drawX, drawY, drawWidth, drawHeight);
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.drawImage(video, drawX, drawY, drawWidth, drawHeight);
+  ctx.strokeStyle = 'rgba(255,255,255,.22)';
   ctx.lineWidth = 2;
   ctx.strokeRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
 }
 
-function drawFrameLabel(ctx, label, x, y, cellWidth) {
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
-  ctx.fillRect(x + 8, y + 8, 82, 28);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 18px Arial, sans-serif';
+function drawFrameLabel(ctx, label, x, y) {
+  ctx.fillStyle = 'rgba(15,23,42,.82)';
+  ctx.fillRect(x + 8, y + 8, 78, 28);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 17px Arial, sans-serif';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, x + 18, y + 22);
+  ctx.fillText(label, x + 16, y + 22);
 }
 
 function canvasToBase64(canvas, quality = 0.86) {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        reject(new Error('動画フレーム画像の生成に失敗しました。'));
-        return;
-      }
+    canvas.toBlob(blob => {
+      if (!blob) return reject(new Error('動画フレーム画像の生成に失敗しました。'));
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-      reader.onerror = () => reject(new Error('動画フレーム画像の読み込みに失敗しました。'));
+      reader.onerror = () => reject(new Error('動画フレーム画像を読み込めませんでした。'));
       reader.readAsDataURL(blob);
     }, 'image/jpeg', quality);
   });
