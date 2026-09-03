@@ -174,8 +174,11 @@ form.addEventListener('submit', async (e) => {
       } else if (file.type.startsWith('video/')) {
         videoIndex += 1;
         const duration = await getVideoDuration(file);
-        mediaContents.push({ type: 'text', text: `【Instagram投稿予定 動画${videoIndex}: ${file.name}】長さ ${duration ? duration.toFixed(1) : '?'}秒。画面内の文字と音声の両方を確認し、修正箇所はタイムスタンプで示してください。` });
-        mediaContents.push(await videoToGeminiContent(file, duration));
+        setStage(2, `動画を1秒ごとに分解しています…（${file.name}）`);
+        const videoParts = await videoToGeminiContents(file, duration);
+        mediaContents.push({ type: 'text', text: `【Instagram投稿予定 動画${videoIndex}: ${file.name}】長さ ${duration ? duration.toFixed(1) : '?'}秒。動画は1秒ごとにフレームを抽出し、16コマずつまとめたコンタクトシートとして添付しています。各コマ左上の時刻（mm:ss）を見て、修正箇所はタイムスタンプ付きで示してください。音声はこのGitHub Pages版では未解析なので、映像内テロップ・画面情報・見た目を中心に確認してください。` });
+        mediaContents.push(...videoParts);
+        setStage(2, 'Instagramの画像・動画を準備しています…');
       }
     }
 
@@ -217,7 +220,9 @@ ${page?.description ? `\nページ説明: ${page.description}` : ''}
 ${instagramUrl ? `【Instagram投稿URL】\n${instagramUrl}\n公開状態で取得可能ならURL Contextでも確認してください。取得できない場合はアップロード素材を優先してください。` : ''}
 
 重要ルール:
-- 画像内の文字、動画の画面内文字・図表、動画音声の発話を確認する。
+- 画像内の文字、動画の画面内文字・図表を確認する。
+- 動画は1秒ごとにフレーム抽出したコンタクトシートとして渡される。各コマ左上の時刻ラベルを見て判断する。
+- このGitHub Pages版では動画音声は未解析のため、音声由来の断定はしない。
 - 家賃、共益費、管理費、敷金礼金、間取り、専有面積、最寄駅、徒歩分数、大学までの距離・時間、設備、家具家電、築年月、キャンペーン等、投稿内で事実として表現されている項目を対象にする。
 - Instagramに書かれていない項目を無理にチェック項目へ追加しない。
 - WebとPDFで同じならそれを正とする。WebとPDF自体が矛盾する場合は official_conflict にして、人間確認を促す。
@@ -337,12 +342,28 @@ async function fileToGeminiContent(file, kind) {
   return { type: kind, uri: uploaded.uri, mime_type: uploaded.mime_type || normalizedMime(file, kind) };
 }
 
-async function videoToGeminiContent(file, duration) {
-  const uploaded = await uploadFileToGemini(file);
-  const processing = duration > 180
-    ? { type: 'agentic' }
-    : { type: 'static', fps: duration > 60 ? 0.5 : 1 };
-  return { type: 'video', uri: uploaded.uri, mime_type: uploaded.mime_type || normalizedMime(file, 'video'), processing };
+async function videoToGeminiContents(file, duration) {
+  const frames = await extractFramesEverySecond(file, duration);
+  const sheets = await buildContactSheetsFromFrames(frames, {
+    columns: 4,
+    rows: 4,
+    cellWidth: 320,
+    cellHeight: 180,
+    quality: 0.86
+  });
+  const parts = [];
+  sheets.forEach((sheet, index) => {
+    parts.push({
+      type: 'text',
+      text: `動画コンタクトシート ${index + 1}/${sheets.length}（${sheet.startLabel}〜${sheet.endLabel}、${sheet.frameCount}コマ）`
+    });
+    parts.push({
+      type: 'image',
+      data: sheet.base64,
+      mime_type: 'image/jpeg'
+    });
+  });
+  return parts;
 }
 
 async function uploadFileToGemini(file) {
@@ -399,8 +420,7 @@ async function callGeminiJson(payload, timeoutMs = 240_000) {
     headers: {
       'x-goog-api-key': GEMINI_API_KEY,
       'Content-Type': 'application/json',
-      'Api-Revision': '2026-05-20'
-    },
+          },
     body: JSON.stringify(payload)
   }, timeoutMs);
   if (!response.ok) throw await geminiResponseError(response);
@@ -720,6 +740,7 @@ async function copyText(text, btn) {
 $('helpBtn').addEventListener('click', () => $('helpDialog').showModal());
 $('closeHelp').addEventListener('click', () => $('helpDialog').close());
 
+
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -727,6 +748,167 @@ function fileToBase64(file) {
     reader.onerror = () => reject(new Error(`${file.name} を読み込めませんでした。`));
     reader.readAsDataURL(file);
   });
+}
+
+async function extractFramesEverySecond(file, durationHint = 0) {
+  const meta = await loadVideoForFrameExtraction(file);
+  const { video, url } = meta;
+  try {
+    const duration = durationHint || (Number.isFinite(video.duration) ? video.duration : 0);
+    const wholeSeconds = Math.max(1, Math.ceil(duration));
+    const times = [];
+    for (let sec = 0; sec < wholeSeconds; sec += 1) {
+      const safeTime = Math.min(sec + 0.05, Math.max(0.05, duration > 0 ? duration - 0.05 : sec + 0.05));
+      times.push(safeTime);
+    }
+    if (!times.length) times.push(0.05);
+
+    const frames = [];
+    for (const timeSec of times) {
+      await seekVideo(video, timeSec);
+      const frameCanvas = drawVideoFrame(video, 1280, 720);
+      frames.push({
+        timeSec,
+        label: formatVideoTime(timeSec),
+        canvas: frameCanvas
+      });
+    }
+    return frames;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function buildContactSheetsFromFrames(frames, options = {}) {
+  const columns = options.columns || 4;
+  const rows = options.rows || 4;
+  const cellWidth = options.cellWidth || 320;
+  const cellHeight = options.cellHeight || 180;
+  const quality = options.quality || 0.86;
+  const framesPerSheet = columns * rows;
+  const sheets = [];
+
+  for (let offset = 0; offset < frames.length; offset += framesPerSheet) {
+    const chunk = frames.slice(offset, offset + framesPerSheet);
+    const canvas = document.createElement('canvas');
+    canvas.width = columns * cellWidth;
+    canvas.height = rows * cellHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    chunk.forEach((frame, index) => {
+      const col = index % columns;
+      const row = Math.floor(index / columns);
+      const x = col * cellWidth;
+      const y = row * cellHeight;
+      drawFrameIntoCell(ctx, frame.canvas, x, y, cellWidth, cellHeight);
+      drawFrameLabel(ctx, frame.label, x, y, cellWidth);
+    });
+
+    sheets.push({
+      base64: await canvasToBase64(canvas, quality),
+      startLabel: chunk[0]?.label || '00:00',
+      endLabel: chunk[chunk.length - 1]?.label || chunk[0]?.label || '00:00',
+      frameCount: chunk.length
+    });
+  }
+  return sheets;
+}
+
+function loadVideoForFrameExtraction(file) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    const url = URL.createObjectURL(file);
+    video.preload = 'auto';
+    video.muted = true;
+    video.playsInline = true;
+    video.crossOrigin = 'anonymous';
+    video.onloadedmetadata = () => resolve({ video, url });
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(`${file.name} の動画を読み込めませんでした。`));
+    };
+    video.src = url;
+  });
+}
+
+function seekVideo(video, timeSec) {
+  return new Promise((resolve, reject) => {
+    const onSeeked = () => { cleanup(); resolve(); };
+    const onError = () => { cleanup(); reject(new Error('動画フレームの抽出に失敗しました。')); };
+    const cleanup = () => {
+      video.removeEventListener('seeked', onSeeked);
+      video.removeEventListener('error', onError);
+    };
+    video.addEventListener('seeked', onSeeked, { once: true });
+    video.addEventListener('error', onError, { once: true });
+    try {
+      video.currentTime = Math.max(0, timeSec);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
+function drawVideoFrame(video, maxWidth = 1280, maxHeight = 720) {
+  const sourceWidth = video.videoWidth || 1280;
+  const sourceHeight = video.videoHeight || 720;
+  const scale = Math.min(1, maxWidth / sourceWidth, maxHeight / sourceHeight);
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, width, height);
+  return canvas;
+}
+
+function drawFrameIntoCell(ctx, frameCanvas, x, y, cellWidth, cellHeight) {
+  ctx.fillStyle = '#111827';
+  ctx.fillRect(x, y, cellWidth, cellHeight);
+  const scale = Math.min(cellWidth / frameCanvas.width, cellHeight / frameCanvas.height);
+  const drawWidth = Math.round(frameCanvas.width * scale);
+  const drawHeight = Math.round(frameCanvas.height * scale);
+  const drawX = x + Math.round((cellWidth - drawWidth) / 2);
+  const drawY = y + Math.round((cellHeight - drawHeight) / 2);
+  ctx.drawImage(frameCanvas, drawX, drawY, drawWidth, drawHeight);
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x + 1, y + 1, cellWidth - 2, cellHeight - 2);
+}
+
+function drawFrameLabel(ctx, label, x, y, cellWidth) {
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+  ctx.fillRect(x + 8, y + 8, 82, 28);
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 18px Arial, sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, x + 18, y + 22);
+}
+
+function canvasToBase64(canvas, quality = 0.86) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('動画フレーム画像の生成に失敗しました。'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = () => reject(new Error('動画フレーム画像の読み込みに失敗しました。'));
+      reader.readAsDataURL(blob);
+    }, 'image/jpeg', quality);
+  });
+}
+
+function formatVideoTime(totalSeconds) {
+  const value = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(value / 60);
+  const seconds = value % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 function getVideoDuration(file) {
